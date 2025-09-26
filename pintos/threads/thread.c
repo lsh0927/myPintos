@@ -414,11 +414,18 @@ init_thread (struct thread *t, const char *name, int priority) {
 #ifdef USERPROG
     t->pml4 = NULL;
     
+    /* initialize parent-child and semaphores */
+    list_init(&t->child_list);
+    sema_init(&t->fork_sema, 0);
+    sema_init(&t->wait_sema, 0);
+    sema_init(&t->exit_sema, 0);
+
     /* fd 테이블 초기화 */
     for (int i = 0; i < FD_MAX; i++) {
         t->fd_table[i] = NULL;
     }
     t->next_fd = 2;
+    t->runn_file = NULL;
 #endif
 }
 

@@ -15,6 +15,8 @@
 #include "filesys/file.h"
 #include "threads/synch.h"
 #include "threads/init.h"
+#include "devices/input.h"
+#include "userprog/process.h"
 
 #define MSR_STAR 0xc0000081
 #define MSR_LSTAR 0xc0000082
@@ -807,18 +809,18 @@ static int allocate_fd(struct file *file)
      * 
      * 이는 파일을 닫았다가 다시 열 때 fd를 재사용하기 위함
      */
-    for (int fd = 3; fd < cur->fd_idx && fd < FDCOUNT_LIMIT; fd++)
+    for (int fd = 3; fd < cur->next_fd && fd < FD_MAX; fd++)
     {
-        if (cur->fdt[fd] == NULL)
+        if (cur->fd_table[fd] == NULL)
         {
             /*
              * 빈 슬롯을 찾음
              * 
              * 파일을 슬롯에 할당하고 fd_idx를 조정
              */
-            cur->fdt[fd] = file;
-            if (fd >= cur->fd_idx)
-                cur->fd_idx = fd + 1;              // 최대 인덱스 업데이트
+            cur->fd_table[fd] = file;
+            if (fd >= cur->next_fd)
+                cur->next_fd = fd + 1;              // 최대 인덱스 업데이트
             return fd;
         }
     }
@@ -829,10 +831,10 @@ static int allocate_fd(struct file *file)
      * 기존 슬롯에 빈 자리가 없으면 테이블을 확장
      * 단, FDCOUNT_LIMIT을 넘을 수는 없음
      */
-    if (cur->fd_idx < FDCOUNT_LIMIT)
+    if (cur->next_fd < FD_MAX)
     {
-        cur->fdt[cur->fd_idx] = file;
-        return cur->fd_idx++;                      // 후위 증가로 현재값 반환 후 증가
+        cur->fd_table[cur->next_fd] = file;
+        return cur->next_fd++;                      // 후위 증가로 현재값 반환 후 증가
     }
 
     /*
@@ -863,7 +865,7 @@ static struct file *get_file(int fd)
      * fd >= FDCOUNT_LIMIT: 테이블 크기 초과
      * fd >= cur->fd_idx: 아직 할당되지 않은 영역
      */
-    if (fd < 0 || fd >= FDCOUNT_LIMIT || fd >= cur->fd_idx)
+    if (fd < 0 || fd >= FD_MAX || fd >= cur->next_fd)
     {
         return NULL;
     }
@@ -873,7 +875,7 @@ static struct file *get_file(int fd)
      * 
      * NULL일 수도 있음 (닫힌 파일이거나 0,1,2번 표준 입출력)
      */
-    return cur->fdt[fd];
+    return cur->fd_table[fd];
 }
 
 /*
@@ -893,9 +895,9 @@ static void release_fd(int fd)
      * fd >= 3: 표준 입출력(0,1,2)은 해제하지 않음
      * 나머지 조건들: 유효한 범위 내의 fd인지 확인
      */
-    if (fd >= 3 && fd < FDCOUNT_LIMIT && fd < cur->fd_idx)
+    if (fd >= 3 && fd < FD_MAX && fd < cur->next_fd)
     {
-        cur->fdt[fd] = NULL;                       // 슬롯을 비워서 재사용 가능하게 함
+        cur->fd_table[fd] = NULL;                       // 슬롯을 비워서 재사용 가능하게 함
     }
 }
 

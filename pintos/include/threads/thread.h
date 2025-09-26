@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -98,6 +99,19 @@ struct thread {
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 	int exit_status;   
+
+#ifdef USERPROG
+	/* Parent-child relationship and fork/exit synchronization. */
+	struct list child_list;             /* List of child threads. */
+	struct list_elem child_elem;        /* Element for parent's child_list. */
+	struct intr_frame parent_if;        /* Saved CPU context for fork. */
+	struct semaphore fork_sema;         /* Child signals after fork init. */
+	struct semaphore wait_sema;         /* Parent waits for child exit. */
+	struct semaphore exit_sema;         /* Child waits until parent collects. */
+
+	/* Executable file currently running. */
+	struct file *runn_file;
+#endif
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */

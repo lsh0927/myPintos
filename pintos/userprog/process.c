@@ -179,12 +179,13 @@ tid_t process_fork(const char *name, struct intr_frame *if_)
 	 * 이 동기화가 없으면 자식의 메모리 복사가 완료되기 전에
 	 * 부모가 먼저 실행을 계속해버릴 수 있음
 	 */
-	struct thread *child = get_child_process(tid);
-	// sema_down(&child->fork_sema);
+    struct thread *child = get_child_process(tid);
+    // 자식 초기화 완료 대기 (필요시 활성화)
+    // sema_down(&child->fork_sema);
 
 	// /* 자식의 초기화가 실패했다면 에러를 반환함 */
-	// if (child->exit_status == TID_ERROR)
-	// 	return TID_ERROR;
+	if (child->exit_status == TID_ERROR)
+		return TID_ERROR;
 
 	return tid;  // 부모는 자식의 TID를 받음
 }
@@ -310,7 +311,7 @@ static void __do_fork(void *aux)
 	 * 부모가 실행 중인 파일을 자식도 동일하게 참조해야 함
 	 * file_duplicate(): 파일 구조체를 복제 (동일한 파일, 독립적인 파일 포인터)
 	 */
-	if (parent->runn_file != NULL)
+    if (parent->runn_file != NULL)
 	{
 		current->runn_file = file_duplicate(parent->runn_file);
 	}
@@ -346,11 +347,11 @@ static void __do_fork(void *aux)
 	 * 자식도 동일하게 열어두는 것임 (단, 독립적인 파일 포인터)
 	 */
 	
-	/* 부모의 fd 개수가 한계를 넘으면 에러 */
-	if (parent->fd_idx >= FDCOUNT_LIMIT)
+    /* 부모의 fd 개수가 한계를 넘으면 에러 */
+    if (parent->next_fd >= FD_MAX)
 		goto error;
 
-	current->fd_idx = parent->fd_idx;  // 자식의 fd 인덱스 설정
+    current->next_fd = parent->next_fd;  // 자식의 fd 인덱스 설정
 
 	/* 
 	 * fd 3번부터 복제함 (0=stdin, 1=stdout, 2=stderr는 기본값 사용)
@@ -358,11 +359,11 @@ static void __do_fork(void *aux)
 	 * 각 파일에 대해 file_duplicate()를 호출하여
 	 * 동일한 파일을 가리키되 독립적인 파일 포인터를 가지도록 함
 	 */
-	for (int fd = 3; fd < parent->fd_idx; fd++)
+    for (int fd = 3; fd < parent->next_fd; fd++)
 	{
-		if (parent->fdt[fd] == NULL)
+        if (parent->fd_table[fd] == NULL)
 			continue;  // 빈 슬롯은 건너뜀
-		current->fdt[fd] = file_duplicate(parent->fdt[fd]);
+        current->fd_table[fd] = file_duplicate(parent->fd_table[fd]);
 	}
 
 	/* 
@@ -372,7 +373,8 @@ static void __do_fork(void *aux)
 	 * 이 시점에서 자식의 초기화가 완전히 끝났으므로
 	 * 부모가 안전하게 실행을 계속할 수 있음
 	 */
-	//sema_up(&current->fork_sema);
+    // 자식 초기화 완료 신호 (필요시 활성화)
+    sema_up(&current->fork_sema);
 
 	/* 프로세스 초기화 (현재는 빈 함수) */
 	process_init();
@@ -396,7 +398,8 @@ error:
 	 * 부모에게 실패를 알리고 스레드를 종료함
 	 * 부모는 child->exit_status를 확인하여 실패를 감지함
 	 */
-	sema_up(&current->fork_sema);
+    // 실패 신호 (필요시 활성화)
+    sema_up(&current->fork_sema);
 	current->exit_status = TID_ERROR;
 	thread_exit();
 }
@@ -689,12 +692,12 @@ void process_exit(void)
 	 * fd 3번부터 시작 (0=stdin, 1=stdout, 2=stderr는 시스템이 관리)
 	 * 각 파일을 닫고 fdt 슬롯을 NULL로 초기화
 	 */
-	for (int fd = 3; fd < curr->fd_idx; fd++)
+    for (int fd = 3; fd < curr->next_fd; fd++)
 	{
-		if (curr->fdt[fd] != NULL)
+        if (curr->fd_table[fd] != NULL)
 		{
-			file_close(curr->fdt[fd]);
-			curr->fdt[fd] = NULL;
+            file_close(curr->fd_table[fd]);
+            curr->fd_table[fd] = NULL;
 		}
 	}
 
@@ -716,11 +719,7 @@ void process_exit(void)
 	 * 
 	 * palloc_free_multiple(): 여러 페이지로 할당된 메모리를 해제
 	 */
-	if (curr->fdt != NULL)
-	{
-		palloc_free_multiple(curr->fdt, FDT_PAGES);
-		curr->fdt = NULL;
-	}
+    /* 정적 fd_table 사용 중이므로 별도 해제 없음 */
 
 	/* 
 	 * 메모리 공간을 해제함 (페이지 테이블, 물리 메모리 등)
