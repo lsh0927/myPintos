@@ -79,13 +79,24 @@ static struct frame * vm_evict_frame (void) {
 	return NULL;
 }
 
-/* palloc() and get frame. If there is no available page, evict the page
- * and return it. This always return valid address. That is, if the user pool
- * memory is full, this function evicts the frame to get the available memory
- * space.*/
+// User pool에서 새로운 Physical page를 가져와서 새로운 frame 구조체에 할당해서 반환
 static struct frame * vm_get_frame (void) {
 	struct frame *frame = NULL;
 	/* TODO: Fill this function. */
+  
+  // user pool에서 새로운 physical page를 가져옴
+  void *kva = palloc_get_page(PAL_UESR);
+  
+  // page 할당 실패 -> 나중에 swap_out 처리
+  // OS 중시, 소스 파일명, 라인 번호, 함수명 등의 정보와 함께 사용자 지정 메시지를 출력
+  if (kva == NULL) {
+    PANIC("todo");
+  }
+  
+  // 프레임 할당
+  frame = malloc(sizeof(struct frame));
+  // 프레임 멤버 초기화
+  frame->kva = kva;
 
 	ASSERT (frame != NULL);
 	ASSERT (frame->page == NULL);
@@ -117,15 +128,21 @@ void vm_dealloc_page (struct page *page) {
 	free (page);
 }
 
-/* Claim the page that allocate on VA. */
+// spt에서 va에 해당하는 페이지를 가져와서 frame과의 매핑을 요청
 bool vm_claim_page (void *va UNUSED) {
 	struct page *page = NULL;
 	/* TODO: Fill this function */
+  // spt에서 va에 해당하는 page 찾기
+  page = spt_find_page(&thread_current()->spt, va);
 
-	return vm_do_claim_page (page);
+  if (page == NULL) {
+    return false;
+  }
+
+	return vm_do_claim_page(page);
 }
 
-/* Claim the PAGE and set up the mmu. */
+// 새 frame을 가져와서 page와 맵핑
 static bool vm_do_claim_page (struct page *page) {
 	struct frame *frame = vm_get_frame ();
 
@@ -134,8 +151,11 @@ static bool vm_do_claim_page (struct page *page) {
 	page->frame = frame;
 
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
-
-	return swap_in (page, frame->kva);
+  // 가상 주소와 물리 주소를 매핑
+  struct thread *current = thread_current();
+  pml4_set_page(current->pml4, page->va, frame->kva, page->writable)
+	
+  return swap_in (page, frame->kva);
 }
 
 
