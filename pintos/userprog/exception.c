@@ -5,6 +5,12 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "intrinsic.h"
+#include "userprog/syscall.h"
+#include "userprog/process.h"
+
+#ifdef VM
+#include "vm/vm.h"
+#endif
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -86,7 +92,7 @@ kill (struct intr_frame *f) {
 			printf ("%s: dying due to interrupt %#04llx (%s).\n",
 					thread_name (), f->vec_no, intr_name (f->vec_no));
 			intr_dump_frame (f);
-			thread_exit ();
+			sys_exit(-1);
 
 		case SEL_KCSEG:
 			/* Kernel's code segment, which indicates a kernel bug.
@@ -118,32 +124,43 @@ kill (struct intr_frame *f) {
    [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
 static void
 page_fault (struct intr_frame *f) {
-	bool not_present;
-	bool write;
-	bool user;
-	void *fault_addr;
+	bool not_present;  /* True: not-present page, false: writing r/o page. */
+	bool write;        /* True: access was write, false: access was read. */
+	bool user;         /* True: access by user, false: access by kernel. */
+	void *fault_addr;  /* Fault address. */
+
+	/* Obtain faulting address, the virtual address that was
+	   accessed to cause the fault.  It may point to code or to
+	   data.  It is not necessarily the address of the instruction
+	   that caused the fault (that's f->rip). */
 
 	fault_addr = (void *) rcr2();
+
+	/* Turn interrupts back on (they were only off so that we could
+	   be assured of reading CR2 before it changed). */
 	intr_enable ();
 
+
+	/* Determine cause. */
 	not_present = (f->error_code & PF_P) == 0;
 	write = (f->error_code & PF_W) != 0;
 	user = (f->error_code & PF_U) != 0;
 
 #ifdef VM
+	/* For project 3 and later. */
 	if (vm_try_handle_fault (f, fault_addr, user, write, not_present))
 		return;
 #endif
 
+	/* Count page faults. */
 	page_fault_cnt++;
 
-	/* 사용자 관련 page fault면 조용히 프로세스 종료 */
-	if (user || is_user_vaddr(fault_addr)) {
-		printf("%s: exit(-1)\n", thread_current()->name);
-		thread_current()->exit_status = -1;
-		thread_exit();
+	if (user) {
+		// 사용자 프로그램이 일으킨 페이지 폴트인 경우
+		sys_exit(-1);
 	} else {
-		/* 커널 오류인 경우만 메시지 출력 */
+		// 커널 모드에서 발생한 페이지 폴트는 심각한 버그입니다.
+		// (디버깅을 위해 기존 커널 패닉 로직을 유지할 수 있습니다)
 		printf ("Page fault at %p: %s error %s page in %s context.\n",
 				fault_addr,
 				not_present ? "not present" : "rights violation",
@@ -152,3 +169,4 @@ page_fault (struct intr_frame *f) {
 		kill (f);
 	}
 }
+

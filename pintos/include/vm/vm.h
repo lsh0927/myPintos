@@ -2,6 +2,7 @@
 #define VM_VM_H
 #include <stdbool.h>
 #include "threads/palloc.h"
+#include "lib/kernel/hash.h"
 
 enum vm_type {
 	/* page not initialized */
@@ -14,6 +15,7 @@ enum vm_type {
 	VM_PAGE_CACHE = 3,
 
 	/* Bit flags to store state */
+	VM_STACK = (1 << 3), // 스택 페이지임을 표시하는 플래그
 
 	/* Auxillary bit flag marker for store information. You can add more
 	 * markers, until the value is fit in the int. */
@@ -42,19 +44,22 @@ struct thread;
  * DO NOT REMOVE/MODIFY PREDEFINED MEMBER OF THIS STRUCTURE. */
 struct page {
 	const struct page_operations *operations;
-	void *va;              /* Address in terms of user space */
-	struct frame *frame;   /* Back reference for frame */
+	void *va;              /* Address in terms of user space, 가상 주소 (KEY) */
+	struct frame *frame;   /* Back reference for frame, 매핑된 물리 프레임 */
 
 	/* Your implementation */
+	struct hash_elem hash_elem;	/* 해시 테이블 Element */
+	enum vm_type type;			/* 페이지 타입 */
+	bool writable;				/* 페이지 쓰기 가능 여부 */
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
 	union {
-		struct uninit_page uninit;
-		struct anon_page anon;
-		struct file_page file;
+		struct uninit_page uninit;	/* lazy loading(지연 로딩) 정보 */
+		struct anon_page anon;		/* anonymous_page 익명 페이지 관련 정보 */
+		struct file_page file;		/* 파일 페이지 관련 정보 */
 #ifdef EFILESYS
-		struct page_cache page_cache;
+		struct page_cache page_cache;	/* 페이지 cache 관련 정보 */
 #endif
 	};
 };
@@ -85,6 +90,7 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
+	struct hash pages;
 };
 
 #include "threads/thread.h"
