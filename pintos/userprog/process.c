@@ -956,45 +956,34 @@ static bool install_page(void *upage, void *kpage, bool writable);
  * 그렇지 않으면 읽기 전용입니다.
  *
  * 성공 시 true, 메모리 할당 오류나 디스크 읽기 오류 시 false를 반환합니다. */
-static bool
-load_segment(struct file *file, off_t ofs, uint8_t *upage,
-			 uint32_t read_bytes, uint32_t zero_bytes, bool writable)
-{
+
+static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t read_bytes, uint32_t zero_bytes, bool writable) {
 	ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
 	ASSERT(pg_ofs(upage) == 0);
 	ASSERT(ofs % PGSIZE == 0);
 
 	file_seek(file, ofs);
-	while (read_bytes > 0 || zero_bytes > 0)
-	{
-		/* 이 페이지를 어떻게 채울지 계산합니다.
-		 * FILE에서 PAGE_READ_BYTES 바이트를 읽고,
-		 * 나머지 PAGE_ZERO_BYTES 바이트는 0으로 채웁니다. */
+	while (read_bytes > 0 || zero_bytes > 0) {
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* 메모리 페이지 하나를 가져옵니다. */
 		uint8_t *kpage = palloc_get_page(PAL_USER);
-		if (kpage == NULL)
-			return false;
+		if(kpage == NULL) { return false; }
 
-		/* 이 페이지를 로드합니다. */
-		if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
-		{
+		if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes) {
 			palloc_free_page(kpage);
 			return false;
 		}
 		memset(kpage + page_read_bytes, 0, page_zero_bytes);
 
-		/* 이 페이지를 프로세스의 주소 공간에 추가합니다. */
-		if (!install_page(upage, kpage, writable))
-		{
+		if (!install_page(upage, kpage, writable)) {
 			printf("fail\n");
 			palloc_free_page(kpage);
+
 			return false;
 		}
 
-		/* 다음으로 진행. */
+		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
@@ -1003,9 +992,7 @@ load_segment(struct file *file, off_t ofs, uint8_t *upage,
 }
 
 /* USER_STACK에 0으로 채워진 페이지를 매핑하여 최소한의 스택을 생성합니다. */
-static bool
-setup_stack(struct intr_frame *if_)
-{
+static bool setup_stack(struct intr_frame *if_) {
 	uint8_t *kpage;
 	bool success = false;
 
@@ -1037,15 +1024,33 @@ install_page(void *upage, void *kpage, bool writable)
 	return (pml4_get_page(t->pml4, upage) == NULL && pml4_set_page(t->pml4, upage, kpage, writable));
 }
 #else
-/* 여기서부터의 코드는 프로젝트 3 이후에 사용됩니다.
- * 프로젝트 2에만 필요한 구현을 원한다면, 윗 블록에 구현하십시오. */
 
-static bool
-lazy_load_segment(struct page *page, void *aux)
-{
-	/* TODO: 파일에서 세그먼트를 로드하십시오. */
-	/* TODO: 이 함수는 주소 VA에서 첫 페이지 폴트가 발생했을 때 호출됩니다. */
-	/* TODO: 이 함수를 호출할 때 VA는 유효합니다. */
+struct lazy_load_arg {
+	struct file *file;
+	off_t ofs;
+	uint32_t read_bytes;
+	uint32_t zero_bytes;
+};
+
+static bool lazy_load_segment(struct page *page, void *aux) {
+	/* TODO: Load the segment from the file */
+	/* TODO: This called when the first page fault occurs on address VA. */
+	/* TODO: VA is available when calling this function. */
+
+	struct lazy_load_arg *lazy_load_arg = (struct lazy_load_arg *)aux;
+
+	// 1) 파일의 position을 ofs으로 지정
+	file_seek(lazy_load_arg->file, lazy_load_arg->ofs);
+	// 2) 파일을 read_bytes만큼 물리 프레임에 읽음
+	if (file_read(lazy_load_arg->file, page->frame->kva, lazy_load_arg->read_bytes) != (int)(lazy_load_arg->read_bytes))
+	{
+		palloc_free_page(page->frame->kva);
+		return false;
+	}
+	// 3) 다 읽은 지점부터 zero_bytes만큼 0으로 채움
+	memset(page->frame->kva + lazy_load_arg->read_bytes, 0, lazy_load_arg->zero_bytes);
+
+	return true;
 }
 
 /* FILE의 OFS 오프셋에서 시작하는 세그먼트를 주소 UPAGE에 로드합니다.
@@ -1059,48 +1064,60 @@ lazy_load_segment(struct page *page, void *aux)
  * 그렇지 않으면 읽기 전용입니다.
  *
  * 성공 시 true, 메모리 할당 오류나 디스크 읽기 오류 시 false를 반환합니다. */
-static bool
-load_segment(struct file *file, off_t ofs, uint8_t *upage,
-			 uint32_t read_bytes, uint32_t zero_bytes, bool writable)
-{
+static bool load_segment(struct file *file, off_t ofs, uint8_t *upage, uint32_t read_bytes, uint32_t zero_bytes, bool writable) {
+  // read_bytes + zero_bytes가 페이지 크기(PGSIZE)의 배수인지 확인
 	ASSERT((read_bytes + zero_bytes) % PGSIZE == 0);
+  // upage가 페이지 정렬되어 있는지 확인
 	ASSERT(pg_ofs(upage) == 0);
+  // ofs가 페이지 정렬되어 있는지 확인
 	ASSERT(ofs % PGSIZE == 0);
 
-	while (read_bytes > 0 || zero_bytes > 0)
-	{
-		/* 이 페이지를 어떻게 채울지 계산합니다.
-		 * FILE에서 PAGE_READ_BYTES 바이트를 읽고,
-		 * 나머지 PAGE_ZERO_BYTES 바이트는 0으로 채웁니다. */
+  // read_bytes와 zero_bytes가 0보다 큰 동안 루프를 실행
+	while (read_bytes > 0 || zero_bytes > 0) {
+    // 최대로 읽을 수 있는 크기는 PGSIZE
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: lazy_load_segment에 정보를 전달하기 위한 aux를 설정하세요. */
-		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer(VM_ANON, upage,
-											writable, lazy_load_segment, aux))
-			return false;
+    // vm_alloc_page_with_initializer 에 제공할 aux 인수로 필요한 보조 값들을 설정
+    struct lazy_load_arg *lazy_load_arg = (struct lazy_load_arg *)malloc(sizeof(struct lazy_load_arg));
+    
+    // 내용이 담김 파일 객체
+    lazy_load_arg -> file = file;
+    // 이 페이지에서 읽기 시작할 위치
+    lazy_load_arg -> ofs = ofs;
+    // 이 페이지에서 읽어야 하는 바이트 수
+    lazy_load_arg -> read_bytes = page_read_bytes;
+    // 이 페이지에서 read_bytes만큼 읽고 공간이 남아 0으로 채워야 하는 바이트 수
+    lazy_load_arg -> zero_bytes = page_zero_bytes;
 
-		/* 다음으로 진행. */
-		read_bytes -= page_read_bytes;
-		zero_bytes -= page_zero_bytes;
-		upage += PGSIZE;
+    // vm_alloc_page_with_initializer를 호출하여 대기 중인 객체를 생성
+    if(!vm_alloc_page_with_initializer(VM_ANON, upage, writable, lazy_load_segment, lazy_load_arg)) {
+      return false;
+    }
+
+    read_bytes -= page_read_bytes;
+    zero_bytes -= page_zero_bytes;
+    upage += PGSIZE;
+    ofs += page_read_bytes;
 	}
 	return true;
 }
-
 /* USER_STACK에 스택용 PAGE를 생성합니다. 성공 시 true를 반환합니다. */
-static bool
-setup_stack(struct intr_frame *if_)
-{
+static bool setup_stack(struct intr_frame *if_) {
 	bool success = false;
+
+	// 스택은 아래로 성장 -> USER_STACK에서 PGSIZE만큼 아래로 내린 지점에서 페이지를 생성
 	void *stack_bottom = (void *)(((uint8_t *)USER_STACK) - PGSIZE);
 
-	/* TODO: stack_bottom에 스택을 매핑하고 즉시 클레임(claim)하십시오.
-	 * TODO: 성공 시 rsp를 적절히 설정하십시오.
-	 * TODO: 해당 페이지가 스택임을 표시해야 합니다. */
-	/* TODO: 여기에 코드를 작성하세요 */
-
+	// stack_bottom에 페이지를 하나 할당 받음
+	if(vm_alloc_page(VM_ANON | VM_MARKER_0, stack_bottom, 1)) {
+		// 할당 받은 페이지에 바로 물리 프레임을 매핑
+		success = vm_claim_page(stack_bottom);
+		if (success) {
+			// rsp를 변경(argu_stack에서 이 위치부터 인자를 push)
+			if_ -> rsp = USER_STACK;
+		}
+	}
 	return success;
 }
 #endif /* VM */
