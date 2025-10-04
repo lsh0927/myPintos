@@ -36,6 +36,7 @@ enum vm_type page_get_type (struct page *page) {
 static struct frame *vm_get_victim (void);
 static bool vm_do_claim_page (struct page *page);
 static struct frame *vm_evict_frame (void);
+void hash_page_destroy(struct hash_elem *e, void *aux);
 
 /* Create the pending page object with initializer. If you want to create a
  * page, do not create it directly and make it through this function or
@@ -217,14 +218,51 @@ static bool vm_do_claim_page(struct page *page) {
 
 
 /* Copy supplemental page table from src to dst */
-bool supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED, struct supplemental_page_table *src UNUSED) {
+bool supplemental_page_table_copy(struct supplemental_page_table *dst UNUSED, struct supplemental_page_table *src UNUSED) {
+  struct hash_iterator i;
+  hash_first(&i, &src->spt_hash_table);
+  
+  while(hash_next(&i)) {
+    // src page information
+    struct page *src_page = hash_entry(hash_cur(&i), struct page, hash_elem);
+    enum vm_type type = src_page->operations->type;
+    void *upage = src_page->va;
+    bool writable = src_page->writable;
+
+    // if type is uninit
+    if(type == VM_UNINIT) {
+      // uninit page create & initialize
+      vm_initializer *init = src_page->uninit.init;
+      void *aux = src_page->uninit.aux;
+      vm_alloc_page_with_initializer(VM_ANON, upage, writable, init, aux);
+      continue;
+    }
+
+    // if type is not uninit
+    // uninit page create & initialize
+    // init and aux needs Lazy Loading
+    // 지금 만드는 페이지는 기다리지 않고 바로 내용을 넣어줄 것이므로 필요 없음
+    if(!vm_alloc_page(type, upage, writable)) { return false; }
+
+    // vm_claim_page로 요청해서 매핑 & 페이지 타입에 맞게 초기화
+    if(!vm_claim_page(upage)) { return false; }
+
+    // 매핑된 프레임에 내용 로딩
+    struct page *dst_page = spt_find_page(dst, upage);
+    memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE);
+  }
+  return true;
 }
 
 /* Free the resource hold by the supplemental page table */
-void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-	/* TODO: Destroy all the supplemental_page_table hold by thread and
-	 * TODO: writeback all the modified contents to the storage. */
+void supplemental_page_table_kill(struct supplemental_page_table *spt UNUSED) {
+  hash_clear(&spt->spt_hash_table, hash_page_destroy);
+}
+
+void hash_page_destroy(struct hash_elem *e, void *aux) {
+  struct page *page = hash_entry(e, struct page, hash_elem);
+  destroy(page);
+  free(page);
 }
 
 
