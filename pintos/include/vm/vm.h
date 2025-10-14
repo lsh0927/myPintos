@@ -46,6 +46,7 @@ struct page {
 
 	struct hash_elem hash_elem;  // 해시 테이블에 넣기 위한 element
 	bool writable;
+	int mapped_page_count;
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */

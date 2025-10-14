@@ -1025,14 +1025,8 @@ install_page(void *upage, void *kpage, bool writable)
 }
 #else
 
-struct lazy_load_arg {
-	struct file *file;
-	off_t ofs;
-	uint32_t read_bytes;
-	uint32_t zero_bytes;
-};
-
-static bool lazy_load_segment(struct page *page, void *aux) {
+#include "vm/file.h"
+bool lazy_load_segment(struct page *page, void *aux) {
 	/* TODO: Load the segment from the file */
 	/* TODO: This called when the first page fault occurs on address VA. */
 	/* TODO: VA is available when calling this function. */
@@ -1119,5 +1113,16 @@ static bool setup_stack(struct intr_frame *if_) {
 		}
 	}
 	return success;
+}
+
+struct file *process_get_file(int fd)
+{
+	struct thread *curr = thread_current();
+	struct file **fdt = curr->fdt;
+	/* 파일 디스크립터에 해당하는 파일 객체를 리턴 */
+	/* 없을 시 NULL 리턴 */
+	if (fd < 2 || fd >= FDCOUNT_LIMIT)
+		return NULL;
+	return fdt[fd];
 }
 #endif /* VM */
