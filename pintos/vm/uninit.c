@@ -71,23 +71,22 @@ uninit_initialize (struct page *page, void *kva) {
 	void *aux = uninit->aux;
 
 	/* TODO: You may need to fix this function. */
-	/* 페이지 구조체에서 uninit 관련 정보를 제거합니다. */
-	memset(uninit, 0, sizeof(struct uninit_page));
-
 	/* 1. 페이지 타입을 변경(transmute)합니다. */
+	bool success = false;
 	switch (VM_TYPE(type)) {
 		case VM_ANON:
-			if (!anon_initializer (page, type, kva))
-				return false;
+			success = anon_initializer (page, type, kva);
 			break;
 		case VM_FILE:
-			if (!file_backed_initializer (page, type, kva))
-				return false;
+			success = file_backed_initializer (page, type, kva);
 			break;
-		default:
-			 // VM_PAGE_CACHE 등
-			 break;
 	}
+
+	if (!success)
+		return false;
+	
+	// 이제 타입별 초기화가 끝났으므로 uninit 정보를 지웁니다.
+	//memset(uninit, 0, sizeof(struct uninit_page));
 
 	/* 2. 타입 변경 후, 페이지 내용을 채우는 초기화 함수를 호출합니다. */
 	return init ? init (page, aux) : true;

@@ -22,14 +22,6 @@
 #include "vm/vm.h"
 #endif
 
-/* 지연 로딩에 필요한 정보를 담는 구조체 */
-struct lazy_load_info{
-	struct file *file;
-	off_t ofs;
-	uint32_t read_bytes;
-	uint32_t zero_bytes;
-};
-
 static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
@@ -510,9 +502,14 @@ load (const char *file_name, struct intr_frame *if_) {
 		goto done;
 	process_activate (thread_current ());
 
+	/* * 파일 시스템 접근 전 lock을 획득합니다. 
+	 */
+	lock_acquire(&filesys_lock);
+
 	/* Open executable file. */
 	file = filesys_open (copy_file_name);		//복사한 파일명으로 넣기 수정
 	if (file == NULL) {
+		lock_release(&filesys_lock); // 실패 시 lock 해제
 		printf ("load: %s: open failed\n", copy_file_name);
 		goto done;
 	}
@@ -532,6 +529,12 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: error loading executable\n", fn_copy);
 		goto done;
 	}
+
+	/*
+	 * 파일 메타데이터(헤더) 읽기가 끝났으므로 lock을 해제합니다.
+	 * load_segment는 각자 다른 파일 오프셋을 읽으므로 동기화가 불필요합니다.
+	 */
+	lock_release(&filesys_lock);
 
 	/* Read program headers. */
 	file_ofs = ehdr.e_phoff;
@@ -648,7 +651,7 @@ done:
 	/* We arrive here whether the load is successful or not. */
 	
     if (argv_tokens != NULL) {
-        palloc_free_page(argv_tokens); // ✅ 할당된 페이지 해제
+        palloc_free_page(argv_tokens); // 할당된 페이지 해제
     }
 
 	palloc_free_page (fn_copy);
@@ -880,7 +883,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 		/* 3. 초기화 되지 않은 페이지(VM_UNINIT) 생성, 페이지 폴트 시 lazy_load_segment 함수가 호출되도록 설정
 			info 구조체를 aux인자로 전달하여 나중에 사용할 수 있게함 */
-		if (!vm_alloc_page_with_initializer (VM_FILE, upage, writable, lazy_load_segment, info)){
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, info)){
 			free(info);
 			return false;
 		}

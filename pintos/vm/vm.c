@@ -6,6 +6,7 @@
 #include "threads/vaddr.h"
 #include "threads/mmu.h" // pml4_set_page를 위해 추가
 #include "vm/uninit.h"
+#include "vm/file.h"
 #include "lib/kernel/hash.h"
 
 static void spt_kill_action_func (struct hash_elem *e, void *aux);
@@ -122,6 +123,10 @@ spt_insert_page (struct supplemental_page_table *spt,
 
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
+    // 1. 해시 테이블에서 페이지를 먼저 제거합니다.
+    hash_delete(&spt->pages, &page->hash_elem);
+    
+    // 2. 그 다음에 페이지 관련 리소스를 해제합니다.
 	vm_dealloc_page (page);
 	return;
 }
@@ -180,7 +185,15 @@ vm_get_frame (void) {
 
 /* Growing the stack. */
 static void
-vm_stack_growth (void *addr UNUSED) {
+vm_stack_growth (void *addr) {
+	// 1. addr을 페이지 경계로 내림하여 새로 할당할 페이지의 주소를 계산
+	void *new_page_addr = pg_round_down(addr);
+
+	// 2. 새로운 스택 페이지를 익명 페이지(VM_ANON)로 할당
+	if (vm_alloc_page(VM_ANON | VM_STACK, new_page_addr, true)){
+		// 3. 할당 즉시 물리 메모리에 올림
+		vm_claim_page(new_page_addr);
+	}
 }
 
 /* Handle the fault on write_protected page */
@@ -204,7 +217,15 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 	/* 2. SPT에서 페이지를 찾음 */
 	page = spt_find_page(spt, addr);
 	if (page == NULL){		//SPT에 없다면 유효하지 않은 접근 (나중에 스택 확장 처리 추가)
-		return false;
+		/* [SG] STACK GROWTH 로직 추가 */
+		void *rsp = user ? f->rsp : thread_current()->rsp_stack;
+		
+		// 스택 확장 조건 검사
+		if((USER_STACK - (1 << 20) < addr) && (addr < USER_STACK) && (addr >= rsp - 8)){
+			vm_stack_growth(addr);
+			return true;	//스택 확장 조건이면 true 반환
+		}
+		return false;	//스택 확장 조건이 아니면 false 반환
 	}
 
 	/* 3. 찾은 페이지를 물리 메모리에 올림 */
@@ -282,6 +303,28 @@ supplemental_page_table_copy (struct supplemental_page_table *dst, struct supple
         	if (!vm_alloc_page_with_initializer(parent_page->uninit.type, upage, writable, parent_page->uninit.init, parent_page->uninit.aux))
             	return false;
 		}
+		else if (type == VM_FILE) {
+            // VM_FILE 페이지 처리 로직 추가
+            // 부모의 파일 정보를 자식의 aux 데이터로 넘겨주기 위한 구조체 생성
+            struct file *reopened_file = file_reopen(parent_page->file.file);
+            if (reopened_file == NULL) return false;
+
+            struct mmap_load_info *info = (struct mmap_load_info *)malloc(sizeof(struct mmap_load_info));
+            if (info == NULL) {
+                file_close(reopened_file);
+                return false;
+            }
+            info->file = reopened_file;
+            info->offset = parent_page->file.offset;
+            info->read_bytes = parent_page->file.read_bytes;
+            info->zero_bytes = PGSIZE - info->read_bytes;
+
+            if (!vm_alloc_page_with_initializer(VM_FILE, upage, writable, lazy_load_file, info)) {
+                free(info);
+                file_close(reopened_file);
+                return false;
+            }
+		}
      	else { /* VM_ANON 또는 VM_FILE인 경우 */
         	// 해당 타입의 페이지를 생성만 함, 내용은 아래에서 복사
         	if (!vm_alloc_page(type, upage, writable))
@@ -289,13 +332,13 @@ supplemental_page_table_copy (struct supplemental_page_table *dst, struct supple
     	}
 
     	/* 2. 부모 페이지가 이미 물리 메모리에 있었다면, 자식도 즉시 프레임을 할당받아 내용을 복사 */
-    	if (parent_page->frame) {
-        	if (!vm_claim_page(upage)) {
-            	return false;
-        	}
-        	struct page *child_page = spt_find_page(dst, upage);
-        	memcpy(child_page->frame->kva, parent_page->frame->kva, PGSIZE);
-    	}
+		if (parent_page->frame && type != VM_FILE) {
+			if (!vm_claim_page(upage)) {
+				return false;
+			}
+			struct page *child_page = spt_find_page(dst, upage);
+			memcpy(child_page->frame->kva, parent_page->frame->kva, PGSIZE);
+		}
 	}
 	return true; // 루프가 모두 성공적으로 끝나면 true 반환
 }
